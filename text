@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>subscription</title>
+
+    <!--Bootstrap -->
+<link rel="stylesheet" href="assets/css/bootstrap.min.css" type="text/css">
+<link rel="stylesheet" href="assets/css/style.css" type="text/css">
+<link rel="stylesheet" href="assets/css/owl.carousel.css" type="text/css">
+<link rel="stylesheet" href="assets/css/owl.transitions.css" type="text/css">
+<link href="assets/css/slick.css" rel="stylesheet">
+<link href="assets/css/bootstrap-slider.min.css" rel="stylesheet">
+<link href="assets/css/font-awesome.min.css" rel="stylesheet">
+</head>
+<body>
+    
+</body>
+</html>
+
+
+
+PAYMENT PROCESS
+<?php
+// process_payment.php
+
+// Database connection
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "mpesa";
+
+$conn = new mysqli($servername, $username, $password, $dbname);
+
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+// Daraja API configuration
+$consumer_key = 'KMddtJksJ1BEs9KxoXf7e7xPMah3SO7VVHs4hzU6O2pIlGOp';
+$consumer_secret = 'GNyIeBV8SwaLE0OaRpUM2cmHCWn0Ak8NXuAUPTiZqHozQ49I0eIGG5P7c18Uq4Nb';
+//$business_short_code = '601426';
+//$passkey = 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
+$callback_url = '://callback.php';
+
+// Function to generate access token
+function getAccessToken($consumer_key, $consumer_secret) {
+    $url = 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials';
+    $curl = curl_init();
+    curl_setopt($curl, CURLOPT_URL, $url);
+    $credentials = base64_encode($consumer_key . ':' . $consumer_secret);
+    curl_setopt($curl, CURLOPT_HTTPHEADER, array('Authorization: Basic ' . $credentials));
+    curl_setopt($curl, CURLOPT_HEADER, false);
+    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
+    $result = curl_exec($curl);
+    $status = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    $result = json_decode($result);
+    return $result->access_token;
+}
+
+// Function to initiate STK Push
+function initiateSTKPush($access_token, $business_short_code, $passkey, $amount, $phone_number, $callback_url) {
+    $url = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest';
+    $timestamp = date('YmdHis');
+    $password = base64_encode($business_short_code . $passkey . $timestamp);
+    
+    $curl = curl_init();
+    curl_setopt($curl, CURLOPT_URL, $url);
+    curl_setopt($curl, CURLOPT_HTTPHEADER, array('Content-Type:application/json', 'Authorization:Bearer ' . $access_token));
+    
+    $curl_post_data = array(
+        'BusinessShortCode' => $business_short_code,
+        'Password' => $password,
+        'Timestamp' => $timestamp,
+        'TransactionType' => 'CustomerPayBillOnline',
+        'Amount' => $amount,
+        'PartyA' => $phone_number,
+        'PartyB' => $business_short_code,
+        'PhoneNumber' => $phone_number,
+        'CallBackURL' => $callback_url,
+        'AccountReference' => 'CompanyXLTD',
+        'TransactionDesc' => 'Payment of X' 
+    );
+    
+    $data_string = json_encode($curl_post_data);
+    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($curl, CURLOPT_POST, true);
+    curl_setopt($curl, CURLOPT_POSTFIELDS, $data_string);
+    curl_setopt($curl, CURLOPT_HEADER, false);
+    $curl_response = curl_exec($curl);
+    return json_decode($curl_response);
+}
+
+// Process the payment
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $phone_number = $_POST['phoneNumber'];
+    
+    // Get access token
+    $access_token = getAccessToken($consumer_key, $consumer_secret);
+    
+    // Initiate STK Push
+    $stk_push_response = initiateSTKPush($access_token, $business_short_code, $passkey, $amount, $phone_number, $callback_url);
+    
+    if (isset($stk_push_response->ResponseCode) && $stk_push_response->ResponseCode == "0") {
+        // Payment request successful, save to database
+        $checkout_request_id = $stk_push_response->CheckoutRequestID;
+        $sql = "INSERT INTO payments (phone_number, amount, checkout_request_id, status) VALUES (?, ?, ?, 'PENDING')";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("sds", $phone_number, $amount, $checkout_request_id);
+        
+        if ($stmt->execute()) {
+            echo json_encode([
+                'success' => true, 
+                'message' => 'Payment request sent. Please check your phone to complete the transaction.',
+                'checkout_request_id' => $checkout_request_id
+            ]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Error saving payment details.']);
+        }
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Failed to initiate payment. Please try again.']);
+    }
+} else {
+    echo json_encode(['success' => false, 'message' => 'Invalid request method.']);
+}
+
+$conn->close();
+?>
+
+
+CAll Callback_Url
+<?php
+// callback.php
+
+// Database connection
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "bikerental";
+
+$conn = new mysqli($servername, $username, $password, $dbname);
+
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+
+function logMessage($message) {
+    $logFile = 'transaction_log.txt';
+    $timestamp = date('Y-m-d H:i:s');
+    file_put_contents($logFile, "[$timestamp] $message\n", FILE_APPEND);
+}
+
+// Get the response from M-Pesa
+$mpesa_response = file_get_contents('php://input');
+$callbackContent = json_decode($mpesa_response);
+
+logMessage("Received callback: " . $mpesa_response);
+
+// Check if the callback content is valid
+if (isset($callbackContent->Body->stkCallback->ResultCode)) {
+    $result_code = $callbackContent->Body->stkCallback->ResultCode;
+    $checkout_request_id = $callbackContent->Body->stkCallback->CheckoutRequestID;
+
+    if ($result_code == 0) {
+        // Payment successful
+        $status = 'COMPLETED';
+        $mpesa_receipt_number = $callbackContent->Body->stkCallback->CallbackMetadata->Item[1]->Value;
+        logMessage("Payment successful: CheckoutRequestID: $checkout_request_id, M-Pesa Receipt: $mpesa_receipt_number");
+    } else {
+        // Payment failed
+        $status = 'FAILED';
+        $mpesa_receipt_number = null;
+        logMessage("Payment failed: CheckoutRequestID: $checkout_request_id, Result Code: $result_code");
+    }
+
+    // Update the payment status in the database
+    $sql = "UPDATE payments SET status = ?, mpesa_receipt = ? WHERE checkout_request_id = ?";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("sss", $status, $mpesa_receipt_number, $checkout_request_id);
+    
+    if ($stmt->execute()) {
+        logMessage("Payment status updated in database: $checkout_request_id - $status");
+    } else {
+        logMessage("Error updating payment status: " . $stmt->error);
+    }
+} else {
+    logMessage("Invalid callback content received");
+}
+
+$conn->close();
+
+// Respond to M-Pesa
+$response = array(
+    'ResultCode' => 0,
+    'ResultDesc' => 'Confirmation received successfully'
+);
+header('Content-Type: application/json');
+echo json_encode($response);
+
+
+
+<?php
+if(isset($_POST['submit'])){
+
+
+  date_default_timezone_set('Africa/Nairobi');
+
+  # access token
+  $consumerKey = 'YM1exLPGq6JAzPrac5Irgmqr4jk4nKMYBkgtzfgcJZzhmEwy'; //Fill with your app Consumer Key
+  $consumerSecret = 'I6r67uSkz5kzPAPgp2QSkVMyop06wUxJhS59HROA1LX0hvDQgLo9SXDHhMuQt8dh'; // Fill with your app Secret
+
+  # define the variales
+  # provide the following details, this part is found on your test credentials on the developer account
+  $BusinessShortCode = '174379';
+  $Passkey = 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';  
+  
+  /*
+    This are your info, for
+    $PartyA should be the ACTUAL clients phone number or your phone number, format 2547********
+    $AccountRefference, it maybe invoice number, account number etc on production systems, but for test just put anything
+    TransactionDesc can be anything, probably a better description of or the transaction
+    $Amount this is the total invoiced amount, Any amount here will be 
+    actually deducted from a clients side/your test phone number once the PIN has been entered to authorize the transaction. 
+    for developer/test accounts, this money will be reversed automatically by midnight.
+  */
+  
+   $PartyA = $_POST['phone']; // This is your phone number, 
+  $AccountReference = 'Urban Voyage';
+  $PartyA = '174379';
+  $TransactionDesc = 'Test Payment';
+  $Amount = $_POST['amount'];
+ 
+  # Get the timestamp, format YYYYmmddhms -> 20181004151020
+  $Timestamp = date('YmdHis');    
+  
+  # Get the base64 encoded string -> $password. The passkey is the M-PESA Public Key
+  $Password = base64_encode($BusinessShortCode.$Passkey.$Timestamp);
+
+  # header for access token
+  $headers = ['Content-Type:application/json; charset=utf8'];
+
+    # M-PESA endpoint urls
+  $access_token_url = 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials';
+  $initiate_url = 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest';
+
+  # callback url
+  $CallBackURL = 'https://mydomain.com/path/callback_url.php';  
+
+  $curl = curl_init($access_token_url);
+  curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
+  curl_setopt($curl, CURLOPT_RETURNTRANSFER, TRUE);
+  curl_setopt($curl, CURLOPT_HEADER, FALSE);
+  curl_setopt($curl, CURLOPT_USERPWD, $consumerKey.':'.$consumerSecret);
+  $result = curl_exec($curl);
+  $status = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+  $result = json_decode($result);
+  $access_token = $result->access_token;  
+  curl_close($curl);
+
+  # header for stk push
+  $stkheader = ['Content-Type:application/json','Authorization:Bearer '.$access_token];
+
+  # initiating the transaction
+  $curl = curl_init();
+  curl_setopt($curl, CURLOPT_URL, $initiate_url);
+  curl_setopt($curl, CURLOPT_HTTPHEADER, $stkheader); //setting custom header
+
+  $curl_post_data = array(
+    //Fill in the request parameters with valid values
+    'BusinessShortCode' => $BusinessShortCode,
+    'Password' => $Password,
+    'Timestamp' => $Timestamp,
+    'TransactionType' => 'CustomerPayBillOnline',
+    'Amount' => $Amount,
+    'PartyA' => $PartyA,
+    'PartyB' => $BusinessShortCode,
+    'PhoneNumber' => $PartyA,
+    'CallBackURL' => $CallBackURL,
+    'AccountReference' => $AccountReference,
+    'TransactionDesc' => $TransactionDesc
+  );
+
+  $data_string = json_encode($curl_post_data);
+  curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+  curl_setopt($curl, CURLOPT_POST, true);
+  curl_setopt($curl, CURLOPT_POSTFIELDS, $data_string);
+  $curl_response = curl_exec($curl);
+  print_r($curl_response);
+
+  echo $curl_response;
+};
+?>
+
+
+
+
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M-Pesa Payment Form</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.1.0/dist/full.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <div id="statusMessage" class="mb-4"></div>
+        <div id="successCard" class="hidden mb-4"></div>
+        <form id="paymentForm" class="card w-96 bg-base-100 shadow-xl mx-auto">
+            <div class="card-body">
+                <h2 class="card-title">M-Pesa Payment</h2>
+                <div class="form-control">
+                    <label class="label" for="phoneNumber">
+                        <span class="label-text">Phone Number</span>
+                    </label>
+                    <input type="tel" id="phoneNumber" name="phoneNumber" placeholder="254700000000" class="input input-bordered" required>
+                </div>
+                <div class="form-control">
+                    <label class="label" for="amount">
+                        <span class="label-text">Amount (KES)</span>
+                    </label>
+                    <input type="number" id="amount" name="amount" placeholder="100" class="input input-bordered" required>
+                </div>
+                <div class="card-actions justify-end">
+                    <button type="submit" class="btn btn-primary">Pay Now</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            let checkoutRequestId = null;
+            let retryCount = 0;
+            const maxRetries = 10;
+            const retryInterval = 5000; // 5 seconds
+
+            $('#paymentForm').on('submit', function(e) {
+                e.preventDefault();
+                
+                $.ajax({
+                    url: 'process_payment.php',
+                    type: 'POST',
+                    data: $(this).serialize(),
+                    dataType: 'json',
+                    beforeSend: function() {
+                        $('#statusMessage').html('<div class="alert alert-info">Processing payment...</div>');
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            $('#statusMessage').html('<div class="alert alert-info">' + response.message + '</div>');
+                            checkoutRequestId = response.checkout_request_id;
+                            retryCount = 0;
+                            pollTransactionStatus();
+                        } else {
+                            $('#statusMessage').html('<div class="alert alert-error">' + response.message + '</div>');
+                        }
+                    },
+                    error: function() {
+                        $('#statusMessage').html('<div class="alert alert-error">An error occurred. Please try again.</div>');
+                    }
+                });
+            });
+
+            function pollTransactionStatus() {
+                if (!checkoutRequestId) return;
+
+                $.ajax({
+                    url: 'check_status.php',
+                    type: 'GET',
+                    data: { checkout_request_id: checkoutRequestId },
+                    dataType: 'json',
+                    success: function(response) {
+                        if (response.status === 'COMPLETED') {
+                            displaySuccessCard(response.mpesa_receipt, response.amount);
+                        } else if (response.status === 'FAILED') {
+                            $('#statusMessage').html('<div class="alert alert-error">' + response.message + '</div>');
+                        } else if (retryCount < maxRetries) {
+                            $('#statusMessage').html('<div class="alert alert-info">Payment is being processed. Please wait...</div>');
+                            retryCount++;
+                            setTimeout(pollTransactionStatus, retryInterval);
+                        } else {
+                            $('#statusMessage').html('<div class="alert alert-warning">Payment status check timed out. Please check your M-Pesa for the transaction status.</div>');
+                        }
+                    },
+                    error: function() {
+                        $('#statusMessage').html('<div class="alert alert-error">Error checking payment status.</div>');
+                        if (retryCount < maxRetries) {
+                            retryCount++;
+                            setTimeout(pollTransactionStatus, retryInterval);
+                        }
+                    }
+                });
+            }
+
+            function displaySuccessCard(mpesaReceipt, amount) {
+                const successCard = `
+                    <div class="card w-96 bg-base-100 shadow-xl mx-auto fade-in">
+                        <div class="card-body items-center text-center">
+                            <div class="text-6xl mb-4">🎉</div>
+                            <h2 class="card-title text-success">Payment Successful!</h2>
+                            <p>Your payment of KES ${amount} has been processed.</p>
+                            <div class="bg-gray-100 p-4 rounded-lg mt-4">
+                                <p class="text-sm text-gray-600">Transaction Code</p>
+                                <p class="text-lg font-semibold">${mpesaReceipt}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                $('#successCard').html(successCard).removeClass('hidden');
+                $('#statusMessage').html('');
+                $('#paymentForm').hide();
+            }
+        });
+    </script>
+</body>
+</html>
+
+
+
+callback_url
+<?php
+ 		header("Content-Type: application/json");
+
+     $response = '{
+         "ResultCode": 0, 
+         "ResultDesc": "Confirmation Received Successfully"
+     }';
+ 
+     // DATA
+     $mpesaResponse = file_get_contents('php://input');
+ 
+     // log the response
+     $logFile = "M_PESAConfirmationResponse.txt";
+ 
+     // write to file
+     $log = fopen($logFile, "a");
+ 
+     fwrite($log, $mpesaResponse);
+     fclose($log);
+ 
+     echo $response;
+
+
+
+
+     <?php
+  include('express-stk.php');
+?>
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            @import url(https://fonts.googleapis.com/css?family=Lato:400,100,300,700,900);
+@import url(https://fonts.googleapis.com/css?family=Source+Code+Pro:400,200,300,500,600,700,900);
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  flex-direction: column; }
+
+* {
+  box-sizing: border-box; }
+
+html {
+  background-color: #171A3D;
+  font-family: 'Lato', sans-serif; }
+
+.price h1 {
+  font-weight: 300;
+  color: #18C2C0;
+  letter-spacing: 2px; 
+  text-align:center;
+}
+
+.card {
+  margin-top: 30px;
+  margin-bottom: 30px;
+  width: 520px; }
+.card .row {
+    width: 100%;
+    padding: 1rem 0;
+    border-bottom: 1.2px solid #292C58; }
+.card .row.number{
+    background-color: #242852;
+}
+
+.cardholder .info, .number .info {
+  position: relative;
+  margin-left: 40px; }
+  .cardholder .info label, .number .info label {
+    display: inline-block;
+    letter-spacing: 0.5px;
+    color: #8F92C3;
+    width: 40%; }
+  .cardholder .info input, .number .info input {
+    display: inline-block;
+    width: 55%;
+    background-color: transparent;
+    font-family: 'Source Code Pro';
+    border: none;
+    outline: none;
+    margin-left: 1%;
+    color: white; }
+    .cardholder .info input::placeholder, .number .info input::placeholder {
+      font-family: 'Source Code Pro';
+      color: #444880; }
+
+#cardnumber, #cardnumber::placeholder {
+  letter-spacing: 2px;
+font-size:16px; }
+
+.button button {
+  font-size: 1.2rem;
+  font-weight: 400;
+  letter-spacing: 1px;
+  width: 520px;
+  background-color: #18C2C0;
+  border: none;
+  color: #fff;
+  padding: 18px;
+  border-radius: 5px;
+  outline: none;
+  cursor:pointer;
+  transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+  .button button:hover {
+    background-color: #15aeac; }
+  .button button:active {
+    background-color: #139b99; }
+  .button button i {
+    font-size: 1.2rem;
+    margin-right: 5px; }
+
+        </style>
+    </head>
+   <body>
+   <div class="container">
+    <form action='checkout.php' method='POST'>
+    <div class="price">
+        <h1>Awesome....!!!!</h1> <!-- For testing purposes, we have added the amount manually. This should proceed from your website -->
+    </div>
+    <div class="card__container">
+        <div class="card">
+            <div class="row">
+                    <img src="mpesa.png" style="width:30%;margin: 0 35%;">
+                    <p style="color:#8F92C3;line-height:1.7;">1. Enter the <b>phone number</b> and press "<b>Confirm and Pay</b>"</br>2. You will receive a popup on your phone. Enter your <b>MPESA PIN</b></p>
+                    <?php if ($errmsg != ''): ?>
+                        <p style="    background: #cc2a24;padding: .8rem;color: #ffffff;"><?php echo $errmsg; ?></p>
+                    <?php endif; ?>
+            </div>
+            <div class="row number">
+                <div class="info">
+                    <input type="hidden" name="orderNo" value="#O2JDI2I3R" /> <!-- For testing purposes, we have added the value. This should proceed from your website -->
+                    <label for="cardnumber">Phone number</label>
+                    <input id="cardnumber" type="text" name="phone_number" maxlength="10" placeholder="0700000000"/>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="button">
+        <button type="submit"><i class="ion-locked"></i>Confirm and Pay</button>
+    </div>
+    </form>
+    <p style="color:#8F92C3;line-height:1.7;margin-top:5rem;">Copyright 2022 | All Rights Reserved | Made by MediaForce</p>
+</div>
+   </body>
+</html>
+
+<?php
+
+// Check if the form was submitted
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Check if 'amount' and 'subscription' keys exist in $_POST
+    if (isset($_POST['amount'], $_POST['subscription'])) {
+        $amount = $_POST['amount'];
+        $subscription = $_POST['subscription'];
+  
+        // Save subscription details in session (optional)
+        $_SESSION['subscription'] = $subscription;
+        $_SESSION['amount'] = $amount;
+  
+        // Redirect to express-stk.php for payment processing
+        header("Location: express-stk.php");
+        exit();
+    } else {
+        $errmsg = "Required fields are missing. Please try again.";
+    }
+  } else {
+    // Redirect to subscription page if accessed directly
+    header("Location: subscription.php");
+    exit();
+  }
+  ?>
+
+include("express-stk.php");
+
+
+echo '<a href="index.php">Home<br /></a>';
+
+$content = file_get_contents('php://input'); //Receives the JSON Result from safaricom
+$res = json_decode($content, true); //Convert the json to an array
+
+$dataToLog = array(
+    date("Y-m-d H:i:s"), //Date and time
+    " MerchantRequestID: ".$res['Body']['stkCallback']['MerchantRequestID'],
+    " CheckoutRequestID: ".$res['Body']['stkCallback']['CheckoutRequestID'],
+    " ResultCode: ".$res['Body']['stkCallback']['ResultCode'],
+    " ResultDesc: ".$res['Body']['stkCallback']['ResultDesc'],
+);
+
+$data = implode(" - ", $dataToLog);
+$data .= PHP_EOL;
+file_put_contents('transaction_log', $data, FILE_APPEND); //Logs the results to our log file
+
+
+//Saves the result to the database
+$conn=new PDO("mysql:host=localhost;dbname=bikerental","root","");
+$conn->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_EXCEPTION);
+
+$stmt = $conn->query("SELECT * FROM orders ORDER BY ID DESC LIMIT 1");
+$stmt->execute();
+$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+foreach($rows as $row){
+    $ID = $row['ID'];
+
+    if($res['Body']['stkCallback']['ResultCode'] == '0'){
+        $sql = $conn->query("UPDATE `orders` SET `Status` = 'CANCELLED' WHERE `orders`.`ID` = $ID");
+        $rs = $sql->execute();
+     }else{
+        $sql = $conn->query("UPDATE `orders` SET `Status` = 'SUCCESS' WHERE `orders`.`ID` = $ID");
+        $rs = $sql->execute();
+     }
+
+    if($rs){
+        file_put_contents('error_log', "Records Inserted", FILE_APPEND);;
+    }else{
+        file_put_contents('error_log', "Failed to insert Records", FILE_APPEND);
+    }
+}
+
+?>
+
+
+
+
+<?php 
+session_start();
+$errors  = array();
+$errmsg  = '';
+
+
+$config = array(
+    "env"              => "sandbox",
+    "BusinessShortCode"=> "174379",
+    "key"              => "YM1exLPGq6JAzPrac5Irgmqr4jk4nKMYBkgtzfgcJZzhmEwy", //Enter your consumer key here
+    "secret"           => "I6r67uSkz5kzPAPgp2QSkVMyop06wUxJhS59HROA1LX0hvDQgLo9SXDHhMuQt8dh", //Enter your consumer secret here
+    "username"         => "Biloo",
+    "TransactionType"  => "CustomerPayBillOnline",
+    "passkey"          => "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919", //Enter your passkey here
+    "CallBackURL"      => "https://f899-41-90-64-220.ngrok.io/mpesa/callback.php", //When using localhost, Use Ngrok to forward the response to your Localhost
+    "AccountReference" => "Urban Voyage",
+    "TransactionDesc"  => "Payment of X" ,
+);
+
+
+
+if (isset($_POST['phone_number'])) {
+
+    $phone = $_POST['phone_number'];
+    $orderNo = $_POST['orderNo'];
+    $amount = '';
+
+    $phone = (substr($phone, 0, 1) == "+") ? str_replace("+", "", $phone) : $phone;
+    $phone = (substr($phone, 0, 1) == "0") ? preg_replace("/^0/", "254", $phone) : $phone;
+    $phone = (substr($phone, 0, 1) == "7") ? "254{$phone}" : $phone;
+
+
+
+    $access_token = ($config['env']  == "live") ? "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials" : "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"; 
+    $credentials = base64_encode($config['key'] . ':' . $config['secret']); 
+    
+    $ch = curl_init($access_token);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Basic " . $credentials]);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1); 
+    $response = curl_exec($ch);
+    curl_close($ch);
+    $result = json_decode($response); 
+    $token = isset($result->{'access_token'}) ? $result->{'access_token'} : "N/A";
+
+    $timestamp = date("YmdHis");
+    $password  = base64_encode($config['BusinessShortCode'] . "" . $config['passkey'] ."". $timestamp);
+
+    $curl_post_data = array( 
+        "BusinessShortCode" => '174379',
+        "Password" => $password,
+        "Timestamp" => $timestamp,
+        "TransactionType" => $config['TransactionType'],
+        "Amount" => $amount,
+        "PartyA" => $phone,
+        "PartyB" => $config['BusinessShortCode'],
+        "PhoneNumber" => '254717399830',
+        "CallBackURL" => $config['CallBackURL'],
+        "AccountReference" => $config['AccountReference'],
+        "TransactionDesc" => $config['TransactionDesc'],
+    ); 
+
+    $data_string = json_encode($curl_post_data);
+
+    $endpoint = ($config['env'] == "live") ? "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest" : "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"; 
+
+    $ch = curl_init($endpoint );
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Bearer '.$token,
+        'Content-Type: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data_string);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+    $response     = curl_exec($ch);
+    curl_close($ch);
+
+    $result = json_decode(json_encode(json_decode($response)), true);
+
+    if(!preg_match('/^[0-9]{10}+$/', $phone) && array_key_exists('errorMessage', $result)){
+        $errors['phone'] = $result["errorMessage"];
+
+    }if($result['ResponseCode'] === "0"){       //STK Push request successful
+        $MerchantRequestID = $result['MerchantRequestID'];
+        $CheckoutRequestID = $result['CheckoutRequestID'];
+
+        //Saves your request to a database
+        $conn = mysqli_connect("localhost","root","","mpesa");
+       
+        $sql = "INSERT INTO `orders`(`ID`, `OrderNo`, `Amount`, `Phone`, `CheckoutRequestID`, `MerchantRequestID`) VALUES ('','".$orderNo."','".$amount."','".$phone."','".$CheckoutRequestID."','".$MerchantRequestID."');";
+        
+        if ($conn->query($sql) === TRUE){
+            $_SESSION["MerchantRequestID"] = $MerchantRequestID;
+            $_SESSION["CheckoutRequestID"] = $CheckoutRequestID;
+            $_SESSION["phone"] = $phone;
+            $_SESSION["orderNo"] = $orderNo;
+
+            header('location: confirm-payment.php');
+        }else{
+            $errors['database'] = "Unable to initiate your order: ".$conn->error;;  
+            foreach($errors as $error) {
+                $errmsg .= $error . '<br />';
+            } 
+        }
+        
+    }else{
+        $errors['mpesastk'] = $result['errorMessage'];
+        foreach($errors as $error) {
+            $errmsg .= $error . '<br />';
+        }
+    }
+    
+}
+
+?>
+
+
+
+
+<?php 
+session_start();
+$errors  = array();
+$errmsg  = '';
+
+
+$config = array(
+    "env"              => "sandbox",
+    "BusinessShortCode"=> "174379",
+    "key"              => "YM1exLPGq6JAzPrac5Irgmqr4jk4nKMYBkgtzfgcJZzhmEwy", //Enter your consumer key here
+    "secret"           => "I6r67uSkz5kzPAPgp2QSkVMyop06wUxJhS59HROA1LX0hvDQgLo9SXDHhMuQt8dh", //Enter your consumer secret here
+    "username"         => "Biloo",
+    "TransactionType"  => "CustomerPayBillOnline",
+    "passkey"          => "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919", //Enter your passkey here
+    "CallBackURL"      => "https://f899-41-90-64-220.ngrok.io/mpesa/callback.php", //When using localhost, Use Ngrok to forward the response to your Localhost
+    "AccountReference" => "Urban Voyage",
+    "TransactionDesc"  => "Payment of X" ,
+);
+
+
+
+if (isset($_POST['phone_number'])) {
+
+    $phone = $_POST['phone_number'];
+    $orderNo = $_POST['orderNo'];
+    $amount = '300';
+
+    $phone = (substr($phone, 0, 1) == "+") ? str_replace("+", "", $phone) : $phone;
+    $phone = (substr($phone, 0, 1) == "0") ? preg_replace("/^0/", "254", $phone) : $phone;
+    $phone = (substr($phone, 0, 1) == "7") ? "254{$phone}" : $phone;
+
+
+
+    $access_token = ($config['env']  == "live") ? "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials" : "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"; 
+    $credentials = base64_encode($config['key'] . ':' . $config['secret']); 
+    
+    $ch = curl_init($access_token);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Basic " . $credentials]);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1); 
+    $response = curl_exec($ch);
+    curl_close($ch);
+    $result = json_decode($response); 
+    $token = isset($result->{'access_token'}) ? $result->{'access_token'} : "N/A";
+
+    $timestamp = date("YmdHis");
+    $password  = base64_encode($config['BusinessShortCode'] . "" . $config['passkey'] ."". $timestamp);
+
+    $curl_post_data = array( 
+        "BusinessShortCode" => $BusinessShortCode,
+        "Password" => $password,
+        "Timestamp" => $timestamp,
+        "TransactionType" => $config['TransactionType'],
+        "Amount" => $amount,
+        "PartyA" => $PartyA,
+        "PartyB" => $config['BusinessShortCode'],
+        "PhoneNumber" => $PartyA,
+        "CallBackURL" => $config['CallBackURL'],
+        "AccountReference" => $config['AccountReference'],
+        "TransactionDesc" => $config['TransactionDesc'],
+    ); 
+
+    $data_string = json_encode($curl_post_data);
+
+    $endpoint = ($config['env'] == "live") ? "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest" : "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"; 
+
+    $ch = curl_init($endpoint );
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Bearer '.$token,
+        'Content-Type: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data_string);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+    $response     = curl_exec($ch);
+    curl_close($ch);
+
+    $result = json_decode(json_encode(json_decode($response)), true);
+
+    if(!preg_match('/^[0-9]{10}+$/', $phone) && array_key_exists('errorMessage', $result)){
+        $errors['phone'] = $result["errorMessage"];
+
+    }if($result['ResponseCode'] === "0"){       //STK Push request successful
+        $MerchantRequestID = $result['MerchantRequestID'];
+        $CheckoutRequestID = $result['CheckoutRequestID'];
+
+        //Saves your request to a database
+        $conn = mysqli_connect("localhost","root","","bikerental");
+       
+        $sql = "INSERT INTO `orders`(`ID`, `OrderNo`, `Amount`, `Phone`, `CheckoutRequestID`, `MerchantRequestID`) VALUES ('','".$orderNo."','".$amount."','".$phone."','".$CheckoutRequestID."','".$MerchantRequestID."');";
+        
+        if ($conn->query($sql) === TRUE){
+            $_SESSION["MerchantRequestID"] = $MerchantRequestID;
+            $_SESSION["CheckoutRequestID"] = $CheckoutRequestID;
+            $_SESSION["phone"] = $phone;
+            $_SESSION["orderNo"] = $orderNo;
+
+            header('location: confirm-payment.php');
+        }else{
+            $errors['database'] = "Unable to initiate your order: ".$conn->error;;  
+            foreach($errors as $error) {
+                $errmsg .= $error . '<br />';
+            } 
+        }
+        
+    }else{
+        $errors['mpesastk'] = $result['errorMessage'];
+        foreach($errors as $error) {
+            $errmsg .= $error . '<br />';
+        }
+    }
+    
+}
+
+?>
+
+<?php echo $_SERVER['PHP_SELF'] ?>
